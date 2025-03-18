@@ -50,7 +50,7 @@ func TestVersion_Getters(t *testing.T) {
 
 	require.True(t, v.IsPrerelease())
 	require.False(t, v.IsCloudOnlyBuild())
-	require.False(t, v.IsCustomOrNightlyBuild())
+	require.False(t, v.IsCustomOrAdhocBuild())
 }
 
 func TestVersion_IsPrerelease(t *testing.T) {
@@ -79,31 +79,73 @@ func TestVersion_IsPrerelease(t *testing.T) {
 	require.False(t, MustParse("v23.2.0-cloudonly2").IsPrerelease())
 }
 
-func TestVersion_IsCustomOrNightlyBuild(t *testing.T) {
-	// Valid pre-release versions
-	require.False(t, MustParse("v20.2.0-beta.3").IsCustomOrNightlyBuild())
-	require.False(t, MustParse("v19.1.0-rc.5").IsCustomOrNightlyBuild())
-	require.False(t, MustParse("v20.2.0-alpha.1").IsCustomOrNightlyBuild())
-	require.True(t, MustParse("v21.1.0-rc.2-163-g122c66f436").IsCustomOrNightlyBuild())
-	require.True(t, MustParse("v21.1.0-beta.5-57-gf05a57face").IsCustomOrNightlyBuild())
-	require.True(t, MustParse("v21.1.0-alpha.3-2846-g7ae3ac92f7").IsCustomOrNightlyBuild())
+func TestVersion_CustomAndAdhocBuilds(t *testing.T) {
+	builds := []struct {
+		version string
+		adhoc   bool
+		custom  bool
+	}{
+		// Valid pre-release versions
+		{version: "v20.2.0-beta.3", adhoc: false, custom: false},
+		{version: "v19.1.0-rc.5", adhoc: false, custom: false},
+		{version: "v20.2.0-alpha.1", adhoc: false, custom: false},
+		{version: "v21.1.0-rc.2-163-g122c66f436", adhoc: false, custom: true},
+		{version: "v21.1.0-beta.5-57-gf05a57face", adhoc: false, custom: true},
+		{version: "v21.1.0-alpha.3-2846-g7ae3ac92f7", adhoc: false, custom: true},
 
-	// Valid [cloudonly] pre-release versions
-	require.False(t, MustParse("v23.2.0-rc.2-cloudonly-rc2").IsCustomOrNightlyBuild())
+		// Valid [cloudonly] pre-release versions
+		{version: "v23.2.0-rc.2-cloudonly-rc2", adhoc: false, custom: false},
 
-	// Valid production versions
-	require.False(t, MustParse("v19.2.6").IsCustomOrNightlyBuild())
-	require.False(t, MustParse("v21.1.0").IsCustomOrNightlyBuild())
-	require.True(t, MustParse("v21.1.0-247-g5668206478").IsCustomOrNightlyBuild())
+		// Valid production versions
+		{version: "v19.2.6", adhoc: false, custom: false},
+		{version: "v21.1.0", adhoc: false, custom: false},
+		{version: "v21.1.0-247-g5668206478", adhoc: false, custom: true},
 
-	// Valid [cloudonly] production versions
-	require.False(t, MustParse("v23.1.12-cloudonly-rc2").IsCustomOrNightlyBuild())
+		// Valid [cloudonly] production versions
+		{version: "v23.1.12-cloudonly-rc2", adhoc: false, custom: false},
 
-	// Valid [cloudonly] v23.2.0 (production) versions may or may not have "rc" after "-cloudonly" suffix.
-	require.False(t, MustParse("v23.2.0-cloudonly-rc2").IsCustomOrNightlyBuild())
-	require.False(t, MustParse("v23.2.0-cloudonly").IsCustomOrNightlyBuild())
-	require.False(t, MustParse("v23.2.0-cloudonly.1").IsCustomOrNightlyBuild())
-	require.False(t, MustParse("v23.2.0-cloudonly2").IsCustomOrNightlyBuild())
+		// Valid [cloudonly] v23.2.0 (production) versions may or may not have "rc" after "-cloudonly" suffix.
+		{version: "v23.2.0-cloudonly-rc2", adhoc: false, custom: false},
+		{version: "v23.2.0-cloudonly", adhoc: false, custom: false},
+		{version: "v23.2.0-cloudonly.1", adhoc: false, custom: false},
+		{version: "v23.2.0-cloudonly2", adhoc: false, custom: false},
+
+		// All other adhoc labels
+		{version: "v23.2.0-arbitrary-adhoc-label", adhoc: true, custom: false},
+	}
+
+	t.Run("IsCustomOrAdhocBuild", func(t *testing.T) {
+		for _, tc := range builds {
+			v := MustParse(tc.version)
+			if tc.adhoc || tc.custom {
+				require.True(t, v.IsCustomOrAdhocBuild())
+			} else {
+				require.False(t, v.IsCustomOrAdhocBuild())
+			}
+		}
+	})
+
+	t.Run("IsAdhocBuild", func(t *testing.T) {
+		for _, tc := range builds {
+			v := MustParse(tc.version)
+			if tc.adhoc {
+				require.True(t, v.IsAdhocBuild())
+			} else {
+				require.False(t, v.IsAdhocBuild())
+			}
+		}
+	})
+
+	t.Run("IsCustomBuild", func(t *testing.T) {
+		for _, tc := range builds {
+			v := MustParse(tc.version)
+			if tc.custom {
+				require.True(t, v.IsCustomBuild())
+			} else {
+				require.False(t, v.IsCustomBuild())
+			}
+		}
+	})
 }
 
 func TestVersion_IsCloudOnlyBuild(t *testing.T) {
@@ -305,15 +347,15 @@ func TestParse(t *testing.T) {
 					phaseOrdinal: 2,
 				},
 			},
-			// custom releases
+			// adhoc releases
 			{
 				raw: "v24.2.3-12-gabcd1234",
 				want: Version{
-					year:           24,
-					ordinal:        2,
-					patch:          3,
-					phase:          stable,
-					nightlyOrdinal: 12,
+					year:          24,
+					ordinal:       2,
+					patch:         3,
+					phase:         stable,
+					customOrdinal: 12,
 				},
 			},
 		} {
@@ -400,7 +442,7 @@ func TestVersionCompare(t *testing.T) {
 			want: aLessThanB,
 		},
 
-		// even if there's a prerelease or nightly tag
+		// even if there's a prerelease or custom tag
 		{
 			a:    "v20.2.7",
 			b:    "v21.1.0-alpha.3",
@@ -454,7 +496,7 @@ func TestVersionCompare(t *testing.T) {
 			want: aLessThanB,
 		},
 
-		// nightly & custom builds are greater than "regular" builds, prereleases, and cloudonly
+		// custom & adhoc builds are greater than "regular" builds, prereleases, and cloudonly
 		{
 			a:    "v21.1.0-alpha.3",
 			b:    "v21.1.0-1-g9cbe7c5281",
@@ -533,12 +575,12 @@ func TestVersionOrdering(t *testing.T) {
 			want:  []string{"v20.2.10", "v21.1.0-alpha.1", "v21.1.0-beta.2", "v21.1.0-rc.1", "v21.1.0-cloudonly.1", "v21.1.0"},
 		},
 		{
-			name:  "sorts custom builds after corresponding normal version",
+			name:  "sorts adhoc builds after corresponding normal version",
 			input: []string{"v21.1.0-1-g9cbe7c5281", "v21.1.0", "v21.1.0-rc.1"},
 			want:  []string{"v21.1.0-rc.1", "v21.1.0", "v21.1.0-1-g9cbe7c5281"},
 		},
 		{
-			name:  "sorts nonstandard custom builds after corresponding normal version",
+			name:  "sorts nonstandard adhoc builds after corresponding normal version",
 			input: []string{"v21.1.0-customLabel", "v21.1.0", "v21.1.0-rc.1"},
 			want:  []string{"v21.1.0-rc.1", "v21.1.0", "v21.1.0-customLabel"},
 		},
