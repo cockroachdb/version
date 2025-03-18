@@ -37,7 +37,7 @@ const (
 	rc        = releasePhase(3)
 	cloudonly = releasePhase(4)
 	stable    = releasePhase(5)
-	custom    = releasePhase(6)
+	adhoc     = releasePhase(6)
 )
 
 // Version represents a CockroachDB (binary) version. Versions consist of three parts:
@@ -53,11 +53,11 @@ type Version struct {
 	// the fields are compared in the order listed here, and the earliest field with
 	// a difference determines the relative ordering of two unequal versions.
 	//
-	// The reference order: year, ordinal, patch, phase, phaseOrdinal, phaseSubOrdinal, nightlyOrdinal
-	year, ordinal, patch                          int
-	phase                                         releasePhase
-	phaseOrdinal, phaseSubOrdinal, nightlyOrdinal int
-	customLabel                                   string
+	// The reference order: year, ordinal, patch, phase, phaseOrdinal, phaseSubOrdinal, customOrdinal
+	year, ordinal, patch                         int
+	phase                                        releasePhase
+	phaseOrdinal, phaseSubOrdinal, customOrdinal int
+	adhocLabel                                   string
 	// raw is the original, unprocessed string this Version was created with
 	raw string
 }
@@ -82,7 +82,7 @@ func (v Version) Patch() int {
 // - %p: phase sort order (see the top of version.go)
 // - %o: phase ordinal (eg, the 1 in "v24.1.0-rc.1")
 // - %s: phase sub-ordinal (eg the 2 in "v24.1.0-rc.1-cloudonly.2")
-// - %n: nightly ordinal (eg the 12 in "v24.1.0-12-gabcdef")
+// - %n: adhoc build ordinal (eg the 12 in "v24.1.0-12-gabcdef")
 // - %%: literal "%"
 func (v Version) Format(formatStr string) string {
 	placeholderRe := regexp.MustCompile("%[^%XYZpPosn]")
@@ -96,7 +96,7 @@ func (v Version) Format(formatStr string) string {
 		beta:      "beta",
 		rc:        "rc",
 		cloudonly: "cloudonly",
-		custom:    "",
+		adhoc:     "",
 		stable:    "",
 	}
 
@@ -107,7 +107,7 @@ func (v Version) Format(formatStr string) string {
 	formatStr = strings.ReplaceAll(formatStr, "%P", phaseName[v.phase])
 	formatStr = strings.ReplaceAll(formatStr, "%o", strconv.Itoa(v.phaseOrdinal))
 	formatStr = strings.ReplaceAll(formatStr, "%s", strconv.Itoa(v.phaseSubOrdinal))
-	formatStr = strings.ReplaceAll(formatStr, "%n", strconv.Itoa(v.nightlyOrdinal))
+	formatStr = strings.ReplaceAll(formatStr, "%n", strconv.Itoa(v.customOrdinal))
 	formatStr = strings.ReplaceAll(formatStr, "%%", "%")
 	return formatStr
 }
@@ -171,9 +171,19 @@ func (v Version) IsPrerelease() bool {
 	return v.phase < cloudonly && !v.Empty()
 }
 
-// IsCustomOrNightlyBuild determines if the version is a custom build or nightly build.
-func (v Version) IsCustomOrNightlyBuild() bool {
-	return v.nightlyOrdinal > 0
+// IsCustomOrAdhocBuild determines if the version is a adhoc build or adhoc build.
+func (v Version) IsCustomOrAdhocBuild() bool {
+	return v.IsCustomBuild() || v.IsAdhocBuild()
+}
+
+// IsCustomBuild determines if the version is a adhoc build.
+func (v Version) IsCustomBuild() bool {
+	return v.customOrdinal > 0
+}
+
+// IsAdhocBuild determines if the version is a adhoc build.
+func (v Version) IsAdhocBuild() bool {
+	return v.adhocLabel != ""
 }
 
 // IsCloudOnlyBuild determines if the version is a CockroachDB Cloud specific build.
@@ -197,17 +207,17 @@ func Parse(str string) (Version, error) {
 	patterns := []*regexp.Regexp{
 		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))(?:-fips)?$`),
 		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly)\.(?P<phaseOrdinal>[0-9]+)(?:-fips)?$`),
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<nightlyOrdinal>(?:[1-9][0-9]*|0))-g[a-f0-9]+(?:-fips)?$`),
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly).(?P<phaseOrdinal>[0-9]+)-(?P<nightlyOrdinal>(?:[1-9][0-9]*|0))-g[a-f0-9]+(?:-fips)?$`),
+		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<customOrdinal>(?:[1-9][0-9]*|0))-g[a-f0-9]+(?:-fips)?$`),
+		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly).(?P<phaseOrdinal>[0-9]+)-(?P<customOrdinal>(?:[1-9][0-9]*|0))-g[a-f0-9]+(?:-fips)?$`),
 		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly).(?P<phaseOrdinal>[0-9]+)-cloudonly(-rc|\.)(?P<phaseSubOrdinal>(?:[1-9][0-9]*|0))$`),
 		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>cloudonly)-rc(?P<phaseOrdinal>[0-9]+)$`),
 		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>cloudonly)(?P<phaseOrdinal>[0-9]+)?$`),
 
 		// vX.Y.Z-<anything> will sort after the corresponding "plain" vX.Y.Z version
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<customLabel>[-a-zA-Z0-9\.\+]+)$`),
+		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<adhocLabel>[-a-zA-Z0-9\.\+]+)$`),
 
 		// sha256:<hash>:latest-vX.Y-build will sort just after vX.Y.0, but before vX.Y.1
-		regexp.MustCompile(`^sha256:(?P<customLabel>[^:]+):latest-v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)-build$`),
+		regexp.MustCompile(`^sha256:(?P<adhocLabel>[^:]+):latest-v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)-build$`),
 	}
 
 	preReleasePhase := map[string]releasePhase{
@@ -257,15 +267,15 @@ func Parse(str string) (Version, error) {
 				}
 			}
 
-			// nightly/custom builds, eg -10-g7890abcd
-			if ord := submatch(pat, matches, "nightlyOrdinal"); ord != "" {
-				v.nightlyOrdinal, _ = strconv.Atoi(ord)
+			// adhoc/adhoc builds, eg -10-g7890abcd
+			if ord := submatch(pat, matches, "customOrdinal"); ord != "" {
+				v.customOrdinal, _ = strconv.Atoi(ord)
 			}
 
-			// arbitrary/custom build tags; we have these old versions and need to parse them
-			if customLabel := submatch(pat, matches, "customLabel"); customLabel != "" {
-				v.phase = custom
-				v.customLabel = customLabel
+			// arbitrary/adhoc build tags; we have these old versions and need to parse them
+			if adhocLabel := submatch(pat, matches, "adhocLabel"); adhocLabel != "" {
+				v.phase = adhoc
+				v.adhocLabel = adhocLabel
 			}
 
 			return v, nil
@@ -296,12 +306,12 @@ func MustParse(str string) Version {
 // rc, cloudonly. Pre-release versions will look like "v24.1.0-cloudonly.1"
 // or "v23.2.0-rc.1".
 //
-// Additionally, we have custom builds, which have suffixes like "-<n>-g<hex>",
+// Additionally, we have adhoc builds, which have suffixes like "-<n>-g<hex>",
 // where <n> is an integer commit count past the branch point, and <hex> is
 // the git SHA. These versions sort AFTER the corresponding "normal" version,
 // eg "v24.1.0-1-g9cbe7c5281" is AFTER "v24.1.0".
 //
-// A version can have both a pre-release and custom build suffix, like
+// A version can have both a pre-release and adhoc build suffix, like
 // "v24.1.0-rc.2-14-g<hex>". In these cases, the pre-release portion has precedence,
 // so this example would sort after v24.1.0-rc.2, but before v24.1.0-rc.3.
 func (v Version) Compare(w Version) int {
@@ -323,10 +333,10 @@ func (v Version) Compare(w Version) int {
 	if rslt := cmp.Compare(v.phaseSubOrdinal, w.phaseSubOrdinal); rslt != 0 {
 		return rslt
 	}
-	if rslt := cmp.Compare(v.nightlyOrdinal, w.nightlyOrdinal); rslt != 0 {
+	if rslt := cmp.Compare(v.customOrdinal, w.customOrdinal); rslt != 0 {
 		return rslt
 	}
-	if rslt := cmp.Compare(v.customLabel, w.customLabel); rslt != 0 {
+	if rslt := cmp.Compare(v.adhocLabel, w.adhocLabel); rslt != 0 {
 		return rslt
 	}
 	return 0
