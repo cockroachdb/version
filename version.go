@@ -364,3 +364,35 @@ func (v Version) CompareSeries(w Version) int {
 func (v Version) AtLeast(w Version) bool {
 	return v.Compare(w) >= 0
 }
+
+// IncPatch returns a new version with the patch number incremented by 1.
+// The metadata part of the version (pre release, cloudonly, etc) is dropped.
+// In other words, the version becomes a stable version.
+func (v Version) IncPatch() Version {
+	nextVersion := Version{
+		phase:   stable,
+		year:    v.year,
+		ordinal: v.ordinal,
+		patch:   v.patch + 1,
+	}
+	nextVersion.raw = nextVersion.Format("v%X.%Y.%Z")
+	return nextVersion
+}
+
+// IncPreRelease returns a new version with the pre-release part incremented by 1.
+// This method returns an error if the version is not a pre-release.
+func (v Version) IncPreRelease() (Version, error) {
+	if !(v.IsPrerelease()) {
+		return Version{}, errors.New("version is not a prerelease")
+	}
+	nextVersion := Version{
+		raw:          v.raw,
+		phase:        v.phase,
+		year:         v.year,
+		ordinal:      v.ordinal,
+		patch:        v.patch,
+		phaseOrdinal: v.phaseOrdinal + 1,
+	}
+	nextVersion.raw = nextVersion.Format("v%X.%Y.%Z-%P.%o")
+	return nextVersion, nil
+}
