@@ -366,17 +366,19 @@ func (v Version) AtLeast(w Version) bool {
 }
 
 // IncPatch returns a new version with the patch number incremented by 1.
-// The metadata part of the version (pre release, cloudonly, etc) is dropped.
-// In other words, the version becomes a stable version.
-func (v Version) IncPatch() Version {
+// This method returns an error if the version is not a stable version.
+func (v Version) IncPatch() (Version, error) {
+	if v.phase != stable {
+		return Version{}, fmt.Errorf("version %s is not a stable version", v.String())
+	}
 	nextVersion := Version{
-		phase:   stable,
+		phase:   v.phase,
 		year:    v.year,
 		ordinal: v.ordinal,
 		patch:   v.patch + 1,
 	}
 	nextVersion.raw = nextVersion.Format("v%X.%Y.%Z")
-	return nextVersion
+	return nextVersion, nil
 }
 
 // IncPreRelease returns a new version with the pre-release part incremented by 1.

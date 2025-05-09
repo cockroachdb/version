@@ -667,21 +667,29 @@ func TestIncPatch(t *testing.T) {
 	testCases := []struct {
 		currentVersion string
 		nextVersion    string
+		expectError    bool
 	}{
-		{"v21.2.0-alpha.1", "v21.2.1"},
-		{"v21.1.0-beta.3", "v21.1.1"},
-		{"v21.1.0-rc.3", "v21.1.1"},
-		{"v20.2.7", "v20.2.8"},
-		{"v21.1.2", "v21.1.3"},
-		{"v21.1.3", "v21.1.4"},
-		{"v20.2.11", "v20.2.12"},
-		{"v21.1.0", "v21.1.1"},
-		{"v21.1.0-customLabel", "v21.1.1"},
+		{"v21.2.0-alpha.1", "", true},
+		{"v21.1.0-beta.3", "", true},
+		{"v21.1.0-rc.3", "", true},
+		{"v21.1.0-rc.3-cloudonly.1", "", true},
+		{"v21.1.0-customLabel", "", true},
+		{"v21.1.0-cloudonly.3", "", true},
+		{"v20.2.7", "v20.2.8", false},
+		{"v21.1.2", "v21.1.3", false},
+		{"v21.1.3", "v21.1.4", false},
+		{"v20.2.11", "v20.2.12", false},
+		{"v21.1.0", "v21.1.1", false},
 	}
 	for i, tc := range testCases {
 		t.Run(fmt.Sprintf("Version.IncPatch #%d: %s -> %s", i, tc.currentVersion, tc.nextVersion), func(t *testing.T) {
 			a := MustParse(tc.currentVersion)
-			b := a.IncPatch()
+			b, err := a.IncPatch()
+			if tc.expectError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
 			require.Equal(t, MustParse(tc.nextVersion), b)
 		})
 	}
