@@ -387,6 +387,9 @@ func (v Version) IncPreRelease() (Version, error) {
 	if !(v.IsPrerelease()) {
 		return Version{}, errors.New("version is not a prerelease")
 	}
+	if v.phaseSubOrdinal > 0 || v.customOrdinal > 0 {
+		return Version{}, errors.New("only unmodified CRDB versions are supported")
+	}
 	nextVersion := Version{
 		raw:          v.raw,
 		phase:        v.phase,
