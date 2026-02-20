@@ -40,6 +40,63 @@ const (
 	adhoc     = releasePhase(6)
 )
 
+var parsePatterns = []*regexp.Regexp{
+	// these are roughly in "how often we expect to see them" order
+	regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))(?:-fips)?$`),
+	regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly)\.(?P<phaseOrdinal>[0-9]+)(?:-fips)?$`),
+	regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<customOrdinal>(?:[1-9][0-9]*|0))-g[a-f0-9]+(?:-fips)?$`),
+	regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly)\.(?P<phaseOrdinal>[0-9]+)-(?P<customOrdinal>(?:[1-9][0-9]*|0))-g[a-f0-9]+(?:-fips)?$`),
+	regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly)\.(?P<phaseOrdinal>[0-9]+)-cloudonly(-rc|\.)(?P<phaseSubOrdinal>(?:[1-9][0-9]*|0))$`),
+	regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>cloudonly)-rc(?P<phaseOrdinal>[0-9]+)$`),
+	regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>cloudonly)(?P<phaseOrdinal>[0-9]+)?$`),
+
+	// vX.Y.Z-<anything> will sort after the corresponding "plain" vX.Y.Z version
+	regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<adhocLabel>[-a-zA-Z0-9\.\+]+)$`),
+
+	// sha256:<hash>:latest-vX.Y-build will sort just after vX.Y.0, but before vX.Y.1
+	regexp.MustCompile(`^sha256:(?P<adhocLabel>[^:]+):latest-v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)-build$`),
+}
+
+var formatPlaceholderRe = regexp.MustCompile("%[^%XYZpPosn]")
+
+func preReleasePhaseByName(name string) (releasePhase, bool) {
+	switch name {
+	case "alpha":
+		return alpha, true
+	case "beta":
+		return beta, true
+	case "rc":
+		return rc, true
+	case "cloudonly":
+		return cloudonly, true
+	default:
+		return 0, false
+	}
+}
+
+func releasePhaseString(p releasePhase) string {
+	switch p {
+	case alpha:
+		return "alpha"
+	case beta:
+		return "beta"
+	case rc:
+		return "rc"
+	case cloudonly:
+		return "cloudonly"
+	default:
+		return ""
+	}
+}
+
+func submatch(pat *regexp.Regexp, matches []string, group string) string {
+	index := pat.SubexpIndex(group)
+	if index == -1 {
+		return ""
+	}
+	return matches[index]
+}
+
 // Version represents a CockroachDB (binary) version. Versions consist of three parts:
 // a major version, written as "vX.Y" (which is typically the year and release number
 // within the year), a patch version (the "Z" in "vX.Y.Z"), and sometimes one or more
@@ -85,26 +142,16 @@ func (v Version) Patch() int {
 // - %n: adhoc build ordinal (eg the 12 in "v24.1.0-12-gabcdef")
 // - %%: literal "%"
 func (v Version) Format(formatStr string) string {
-	placeholderRe := regexp.MustCompile("%[^%XYZpPosn]")
-	placeholders := placeholderRe.FindAllString(formatStr, -1)
+	placeholders := formatPlaceholderRe.FindAllString(formatStr, -1)
 	if len(placeholders) > 0 {
 		panic(fmt.Sprintf("unknown placeholders in format string: %s", strings.Join(placeholders, ", ")))
-	}
-
-	phaseName := map[releasePhase]string{
-		alpha:     "alpha",
-		beta:      "beta",
-		rc:        "rc",
-		cloudonly: "cloudonly",
-		adhoc:     "",
-		stable:    "",
 	}
 
 	formatStr = strings.ReplaceAll(formatStr, "%X", strconv.Itoa(v.year))
 	formatStr = strings.ReplaceAll(formatStr, "%Y", strconv.Itoa(v.ordinal))
 	formatStr = strings.ReplaceAll(formatStr, "%Z", strconv.Itoa(v.patch))
 	formatStr = strings.ReplaceAll(formatStr, "%p", strconv.Itoa(int(v.phase)))
-	formatStr = strings.ReplaceAll(formatStr, "%P", phaseName[v.phase])
+	formatStr = strings.ReplaceAll(formatStr, "%P", releasePhaseString(v.phase))
 	formatStr = strings.ReplaceAll(formatStr, "%o", strconv.Itoa(v.phaseOrdinal))
 	formatStr = strings.ReplaceAll(formatStr, "%s", strconv.Itoa(v.phaseSubOrdinal))
 	formatStr = strings.ReplaceAll(formatStr, "%n", strconv.Itoa(v.customOrdinal))
@@ -203,83 +250,54 @@ func (v Version) SafeFormat(p redact.SafePrinter, _ rune) {
 
 // Parse creates a version from a string.
 func Parse(str string) (Version, error) {
-	// these are roughly in "how often we expect to see them" order
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))(?:-fips)?$`),
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly)\.(?P<phaseOrdinal>[0-9]+)(?:-fips)?$`),
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<customOrdinal>(?:[1-9][0-9]*|0))-g[a-f0-9]+(?:-fips)?$`),
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly).(?P<phaseOrdinal>[0-9]+)-(?P<customOrdinal>(?:[1-9][0-9]*|0))-g[a-f0-9]+(?:-fips)?$`),
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>alpha|beta|rc|cloudonly).(?P<phaseOrdinal>[0-9]+)-cloudonly(-rc|\.)(?P<phaseSubOrdinal>(?:[1-9][0-9]*|0))$`),
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>cloudonly)-rc(?P<phaseOrdinal>[0-9]+)$`),
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<phase>cloudonly)(?P<phaseOrdinal>[0-9]+)?$`),
-
-		// vX.Y.Z-<anything> will sort after the corresponding "plain" vX.Y.Z version
-		regexp.MustCompile(`^v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)\.(?P<patch>(?:[1-9][0-9]*|0))-(?P<adhocLabel>[-a-zA-Z0-9\.\+]+)$`),
-
-		// sha256:<hash>:latest-vX.Y-build will sort just after vX.Y.0, but before vX.Y.1
-		regexp.MustCompile(`^sha256:(?P<adhocLabel>[^:]+):latest-v(?P<year>[1-9][0-9]*)\.(?P<ordinal>[1-9][0-9]*)-build$`),
-	}
-
-	preReleasePhase := map[string]releasePhase{
-		"alpha":     alpha,
-		"beta":      beta,
-		"rc":        rc,
-		"cloudonly": cloudonly,
-	}
-
-	submatch := func(pat *regexp.Regexp, matches []string, group string) string {
-		index := pat.SubexpIndex(group)
-		if index == -1 {
-			return ""
-		}
-		return matches[index]
-	}
-
 	v := Version{raw: str, phase: stable}
 
-	for _, pat := range patterns {
-		if pat.MatchString(str) {
-			matches := pat.FindStringSubmatch(str)
-
-			// all patterns have vX.Y
-			v.year, _ = strconv.Atoi(submatch(pat, matches, "year"))
-			v.ordinal, _ = strconv.Atoi(submatch(pat, matches, "ordinal"))
-
-			// most have vX.Y.Z
-			if patch := submatch(pat, matches, "patch"); patch != "" {
-				v.patch, _ = strconv.Atoi(patch)
-			}
-
-			// handle -alpha.1, -rc.3, etc
-			if phase := submatch(pat, matches, "phase"); phase != "" {
-				if phaseName, ok := preReleasePhase[phase]; !ok {
-					return Version{}, errors.Newf("unknown phase '%s", phaseName)
-				} else {
-					v.phase = phaseName
-				}
-
-				if ord := submatch(pat, matches, "phaseOrdinal"); ord != "" {
-					v.phaseOrdinal, _ = strconv.Atoi(ord)
-				}
-				// -beta.1-cloudonly-rc1
-				if subOrd := submatch(pat, matches, "phaseSubOrdinal"); subOrd != "" {
-					v.phaseSubOrdinal, _ = strconv.Atoi(subOrd)
-				}
-			}
-
-			// adhoc/adhoc builds, eg -10-g7890abcd
-			if ord := submatch(pat, matches, "customOrdinal"); ord != "" {
-				v.customOrdinal, _ = strconv.Atoi(ord)
-			}
-
-			// arbitrary/adhoc build tags; we have these old versions and need to parse them
-			if adhocLabel := submatch(pat, matches, "adhocLabel"); adhocLabel != "" {
-				v.phase = adhoc
-				v.adhocLabel = adhocLabel
-			}
-
-			return v, nil
+	for _, pat := range parsePatterns {
+		matches := pat.FindStringSubmatch(str)
+		if matches == nil {
+			continue
 		}
+
+		// all patterns have vX.Y
+		v.year, _ = strconv.Atoi(submatch(pat, matches, "year"))
+		v.ordinal, _ = strconv.Atoi(submatch(pat, matches, "ordinal"))
+
+		// most have vX.Y.Z
+		if patch := submatch(pat, matches, "patch"); patch != "" {
+			v.patch, _ = strconv.Atoi(patch)
+		}
+
+		// handle -alpha.1, -rc.3, etc
+		if phase := submatch(pat, matches, "phase"); phase != "" {
+			// Unreachable today: the regexes only match known phase names.
+			// Kept as a safeguard against future pattern changes.
+			if phaseName, ok := preReleasePhaseByName(phase); !ok {
+				return Version{}, errors.Newf("unknown phase '%s'", phase)
+			} else {
+				v.phase = phaseName
+			}
+
+			if ord := submatch(pat, matches, "phaseOrdinal"); ord != "" {
+				v.phaseOrdinal, _ = strconv.Atoi(ord)
+			}
+			// -beta.1-cloudonly-rc1
+			if subOrd := submatch(pat, matches, "phaseSubOrdinal"); subOrd != "" {
+				v.phaseSubOrdinal, _ = strconv.Atoi(subOrd)
+			}
+		}
+
+		// adhoc/adhoc builds, eg -10-g7890abcd
+		if ord := submatch(pat, matches, "customOrdinal"); ord != "" {
+			v.customOrdinal, _ = strconv.Atoi(ord)
+		}
+
+		// arbitrary/adhoc build tags; we have these old versions and need to parse them
+		if adhocLabel := submatch(pat, matches, "adhocLabel"); adhocLabel != "" {
+			v.phase = adhoc
+			v.adhocLabel = adhocLabel
+		}
+
+		return v, nil
 	}
 
 	err := errors.Errorf("invalid version string '%s'", str)

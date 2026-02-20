@@ -252,6 +252,9 @@ func TestParse(t *testing.T) {
 			"v1.2.3+metadata",
 			"v1.2.3+metadata-with-hyphen",
 			"v1.2.3+metadata.with.dots",
+			"v24.1.0-alpha:1",
+			"v24.1.0-rc_1-12-gabcdef12",
+			"v24.1.0-beta/1-cloudonly.2",
 		}
 		for _, str := range testData {
 			_, err := Parse(str)
@@ -366,6 +369,100 @@ func TestParse(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestFormatPlaceholders(t *testing.T) {
+	for _, tc := range []struct {
+		rawVersion string
+		wantPhase  string
+	}{
+		{rawVersion: "v24.1.0-alpha.2", wantPhase: "alpha"},
+		{rawVersion: "v24.1.0-beta.2", wantPhase: "beta"},
+		{rawVersion: "v24.1.0-rc.2", wantPhase: "rc"},
+		{rawVersion: "v24.1.0-cloudonly.2", wantPhase: "cloudonly"},
+		{rawVersion: "v24.1.0", wantPhase: ""},
+		{rawVersion: "v24.1.0-build-tag", wantPhase: ""},
+	} {
+		t.Run(tc.rawVersion, func(t *testing.T) {
+			v := MustParse(tc.rawVersion)
+			require.Equal(t, tc.wantPhase, v.Format("%P"))
+		})
+	}
+
+	require.PanicsWithValue(t, "unknown placeholders in format string: %Q", func() {
+		_ = MustParse("v24.1.0").Format("v%X.%Y.%Z-%Q")
+	})
+}
+
+func TestParseSpecificPatternWins(t *testing.T) {
+	for _, tc := range []struct {
+		raw             string
+		phase           releasePhase
+		phaseOrdinal    int
+		phaseSubOrdinal int
+		customOrdinal   int
+		adhocLabel      string
+	}{
+		{
+			raw:          "v23.2.0-cloudonly2",
+			phase:        cloudonly,
+			phaseOrdinal: 2,
+		},
+		{
+			raw:          "v23.2.0-cloudonly",
+			phase:        cloudonly,
+			phaseOrdinal: 0,
+		},
+		{
+			raw:          "v23.2.0-cloudonly.1",
+			phase:        cloudonly,
+			phaseOrdinal: 1,
+		},
+		{
+			raw:           "v24.1.0-rc.1-12-gabcdef56",
+			phase:         rc,
+			phaseOrdinal:  1,
+			customOrdinal: 12,
+		},
+		{
+			raw:             "v24.1.0-beta.1-cloudonly.2",
+			phase:           beta,
+			phaseOrdinal:    1,
+			phaseSubOrdinal: 2,
+		},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			v := MustParse(tc.raw)
+
+			require.Equal(t, tc.phase, v.phase)
+			require.Equal(t, tc.phaseOrdinal, v.phaseOrdinal)
+			require.Equal(t, tc.phaseSubOrdinal, v.phaseSubOrdinal)
+			require.Equal(t, tc.customOrdinal, v.customOrdinal)
+			require.Equal(t, tc.adhocLabel, v.adhocLabel)
+			require.False(t, v.IsAdhocBuild())
+		})
+	}
+}
+
+func BenchmarkParse(b *testing.B) {
+	testData := []string{
+		"v19.1.11",
+		"v21.1.0-1-g9cbe7c5281",
+		"v22.2.10-1-g7b8322d67c-fips",
+		"v23.1.0-alpha.1-1643-gdf8e73734e-fips",
+		"v23.2.0-rc.2-cloudonly-rc2",
+		"v24.3.0-alpha.1-cloudonly.1",
+		"v23.1.0-swenson-mr-4",
+		"sha256:6bbf843734d11db9cc5eb8ea77f6974032e17ad216c91ccecfaf52a4890eaa11:latest-v22.2-build",
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, err := Parse(testData[i%len(testData)])
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func TestVersionCompare(t *testing.T) {
