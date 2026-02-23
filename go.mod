@@ -1,6 +1,6 @@
 module github.com/cockroachdb/version
 
-go 1.21
+go 1.23
 
 require (
 	github.com/cockroachdb/errors v1.11.3
